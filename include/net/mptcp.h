@@ -12,10 +12,12 @@
  *	Gregory Detal <gregory.detal@uclouvain.be>
  *	Fabien Duchêne <fabien.duchene@uclouvain.be>
  *	Andreas Seelinger <Andreas.Seelinger@rwth-aachen.de>
+ *	Lavkesh Lahngir <lavkesh51@gmail.com>
  *	Andreas Ripke <ripke@neclab.eu>
  *	Vlad Dogaru <vlad.dogaru@intel.com>
- *	Lavkesh Lahngir <lavkesh51@gmail.com>
+ *	Octavian Purdila <octavian.purdila@intel.com>
  *	John Ronan <jronan@tssg.org>
+ *	Catalin Nicutar <catalin.nicutar@gmail.com>
  *	Brandon Heller <brandonh@stanford.edu>
  *
  *
@@ -112,9 +114,6 @@ struct mptcp_tcp_sock {
 	struct delayed_work work;
 	u32	mptcp_loc_nonce;
 	struct tcp_sock *tp; /* Where is my daddy? */
-
-	unsigned long last_snd_probe;
-	unsigned long last_rcv_probe;
 };
 
 struct multipath_options {
@@ -620,7 +619,6 @@ void mptcp_options_write(__be32 *ptr, struct tcp_sock *tp,
 			 struct tcp_out_options *opts,
 			 struct sk_buff *skb);
 void mptcp_close(struct sock *meta_sk, long timeout);
-void mptcp_detach_unused_child(struct sock *sk);
 void mptcp_set_bw_est(struct tcp_sock *tp, u32 now);
 int mptcp_doit(struct sock *sk);
 int mptcp_check_req_master(struct sock *sk, struct sock *child,
@@ -1207,7 +1205,6 @@ static inline void mptcp_parse_options(const uint8_t *ptr, const int opsize,
 				       const struct multipath_options *mopt,
 				       const struct sk_buff *skb) {}
 static inline void mptcp_close(const struct sock *meta_sk, long timeout) {}
-static inline void mptcp_detach_unused_child(const struct sock *sk) {}
 static inline void mptcp_set_bw_est(const struct tcp_sock *tp, u32 now) {}
 static inline int mptcp_check_req_master(const struct sock *sk,
 					 const struct sock *child,
