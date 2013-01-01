@@ -918,8 +918,7 @@ void mptcp_update_metasocket(struct sock *sk, struct sock *meta_sk)
 			mpcb->next_v6_index = 1;
 
 			mptcp_v6_add_raddress(&mpcb->rx_opt,
-					      &inet6_sk(sk)->daddr,
-					      inet_sk(sk)->inet_dport, 0);
+					      &inet6_sk(sk)->daddr, 0, 0);
 			mptcp_v6_set_init_addr_bit(mpcb, &inet6_sk(sk)->daddr);
 			break;
 		}
@@ -934,7 +933,7 @@ void mptcp_update_metasocket(struct sock *sk, struct sock *meta_sk)
 
 		mptcp_v4_add_raddress(&mpcb->rx_opt,
 				      (struct in_addr *)&inet_sk(sk)->inet_daddr,
-				      inet_sk(sk)->inet_dport, 0);
+				      0, 0);
 		mptcp_v4_set_init_addr_bit(mpcb, inet_sk(sk)->inet_daddr);
 		break;
 	}
@@ -1529,7 +1528,9 @@ struct workqueue_struct *mptcp_wq;
 static int __init mptcp_init(void)
 {
 	int ret = -ENOMEM;
+#ifdef CONFIG_SYSCTL
 	struct ctl_table_header *mptcp_sysclt;
+#endif
 
 	mptcp_sock_cache = kmem_cache_create("mptcp_sock",
 					     sizeof(struct mptcp_tcp_sock),
@@ -1563,8 +1564,10 @@ static int __init mptcp_init(void)
 out:
 	return ret;
 
+#ifdef CONFIG_SYSCTL
 register_sysctl_failed:
 	mptcp_pm_undo();
+#endif
 mptcp_pm_failed:
 	destroy_workqueue(mptcp_wq);
 alloc_workqueue_failed:
