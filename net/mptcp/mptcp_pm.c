@@ -728,6 +728,7 @@ void mptcp_address_worker(struct work_struct *work)
 	struct net_device *dev;
 	int i;
 
+	mutex_lock(&mpcb->mutex);
 	lock_sock(meta_sk);
 
 	if (sock_flag(meta_sk, SOCK_DEAD))
@@ -911,6 +912,7 @@ next_loc6_addr:
 	local_bh_enable();
 exit:
 	release_sock(meta_sk);
+	mutex_unlock(&mpcb->mutex);
 	sock_put(meta_sk);
 }
 
