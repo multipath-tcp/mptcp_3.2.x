@@ -1567,9 +1567,12 @@ struct workqueue_struct *mptcp_wq;
 void __init mptcp_init(void)
 {
 #ifdef CONFIG_SYSCTL
-	struct ctl_table_header *mptcp_sysctl;
+	struct ctl_path path[] = {
+		{ .procname = "net" },
+		{ .procname = "mptcp" },
+		{ },
+	};
 #endif
-
 	mptcp_sock_cache = kmem_cache_create("mptcp_sock",
 					     sizeof(struct mptcp_tcp_sock),
 					     0, SLAB_HWCACHE_ALIGN|SLAB_PANIC,
@@ -1591,8 +1594,7 @@ void __init mptcp_init(void)
 		goto mptcp_pm_failed;
 
 #ifdef CONFIG_SYSCTL
-	mptcp_sysctl = register_net_sysctl(&init_net, "net/mptcp", mptcp_table);
-	if (!mptcp_sysctl)
+	if (!register_net_sysctl_table(&init_net, path, mptcp_table))
 		goto register_sysctl_failed;
 #endif
 
