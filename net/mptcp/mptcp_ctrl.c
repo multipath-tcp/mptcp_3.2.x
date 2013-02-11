@@ -68,7 +68,7 @@ int sysctl_mptcp_syn_retries __read_mostly = MPTCP_SYN_RETRIES;
 EXPORT_SYMBOL(sysctl_mptcp_debug);
 
 #ifdef CONFIG_SYSCTL
-static ctl_table mptcp_skeleton[] = {
+static struct ctl_table mptcp_table[] = {
 	{
 		.procname = "mptcp_ndiffports",
 		.data = &sysctl_mptcp_ndiffports,
@@ -105,12 +105,6 @@ static ctl_table mptcp_skeleton[] = {
 		.proc_handler = &proc_dointvec
 	},
 	{ }
-};
-
-static struct ctl_path mptcp_path[] = {
-	{ .procname = "net", },
-	{ .procname = "mptcp", },
-	{ },
 };
 #endif
 
@@ -445,8 +439,8 @@ int mptcp_backlog_rcv(struct sock *meta_sk, struct sk_buff *skb)
 	return ret;
 }
 
-static struct lock_class_key meta_key;
-static struct lock_class_key meta_slock_key;
+struct lock_class_key meta_key;
+struct lock_class_key meta_slock_key;
 
 /* Code heavily inspired from sk_clone() */
 int mptcp_inherit_sk(struct sock *sk, struct sock *newsk, int family,
@@ -522,7 +516,6 @@ int mptcp_inherit_sk(struct sock *sk, struct sock *newsk, int family,
 	newsk->sk_send_head	= NULL;
 	newsk->sk_userlocks	= sk->sk_userlocks & ~SOCK_BINDPORT_LOCK;
 
-	tcp_sk(newsk)->mpc = 0;
 	tcp_sk(newsk)->mptcp = NULL;
 
 	sock_reset_flag(newsk, SOCK_DONE);
@@ -881,7 +874,7 @@ void mptcp_del_sock(struct sock *sk)
 	struct tcp_sock *tp = tcp_sk(sk), *tp_prev;
 	struct mptcp_cb *mpcb;
 
-	if (!tp->mpc || !tp->mptcp->attached)
+	if (!tp->mptcp || !tp->mptcp->attached)
 		return;
 
 	if (tp->mptcp->pre_established) {
@@ -1174,8 +1167,9 @@ void mptcp_sub_close(struct sock *sk, unsigned long delay)
 			    sk->sk_state == TCP_CLOSE) {
 				tp->closing = 1;
 				tcp_close(sk, 0);
-			} else if (tcp_close_state(sk))
+			} else if (tcp_close_state(sk)) {
 				tcp_send_fin(sk);
+			}
 
 			return;
 		}
@@ -1234,7 +1228,6 @@ void mptcp_close(struct sock *meta_sk, long timeout)
 			mpcb->mptcp_loc_token);
 
 	mutex_lock(&mpcb->mutex);
-
 	lock_sock(meta_sk);
 
 	mptcp_for_each_sk(mpcb, sk_it) {
@@ -1301,6 +1294,19 @@ adjudge_to_death:
 	state = meta_sk->sk_state;
 	sock_hold(meta_sk);
 	sock_orphan(meta_sk);
+
+	/* socket will be freed after mptcp_close - we have to prevent
+	 * access from the subflows.
+	 */
+	mptcp_for_each_sk(mpcb, sk_it) {
+		/* Similar to sock_orphan, but we don't set it DEAD, because
+		 * the callbacks are still set and must be called.
+		 */
+		write_lock_bh(&sk_it->sk_callback_lock);
+		sk_set_socket(sk_it, NULL);
+		sk_it->sk_wq  = NULL;
+		write_unlock_bh(&sk_it->sk_callback_lock);
+	}
 
 	/* It is the last release_sock in its life. It will remove backlog. */
 	release_sock(meta_sk);
@@ -1517,7 +1523,10 @@ struct sock *mptcp_check_req_child(struct sock *meta_sk, struct sock *child,
 	sk_set_socket(child, meta_sk->sk_socket);
 	child->sk_wq = meta_sk->sk_wq;
 
-	if (mptcp_add_sock(meta_sk, child, mtreq->rem_id, GFP_ATOMIC))
+	if (mptcp_add_sock(meta_sk, child, mtreq->rem_id, GFP_ATOMIC)) {
+		child_tp->mpc = 0; /* Has been inherited, but now
+				    * child_tp->mptcp is NULL
+				    */
 		/* TODO when we support acking the third ack for new subflows,
 		 * we should silently discard this third ack, by returning NULL.
 		 *
@@ -1525,11 +1534,12 @@ struct sock *mptcp_check_req_child(struct sock *meta_sk, struct sock *child,
 		 * fully add the socket to the meta-sk.
 		 */
 		goto teardown;
+	}
 
 	/* The child is a clone of the meta socket, we must now reset
 	 * some of the fields
 	 */
-	child_tp->mptcp->rx_opt.low_prio = mtreq->low_prio;
+	child_tp->mptcp->rcv_low_prio = mtreq->low_prio;
 	child->sk_sndmsg_page = NULL;
 
 	child_tp->mptcp->slave_sk = 1;
@@ -1554,13 +1564,15 @@ teardown:
 struct workqueue_struct *mptcp_wq;
 
 /* General initialization of mptcp */
-static int __init mptcp_init(void)
+void __init mptcp_init(void)
 {
-	int ret = -ENOMEM;
 #ifdef CONFIG_SYSCTL
-	struct ctl_table_header *mptcp_sysclt;
+	struct ctl_path path[] = {
+		{ .procname = "net" },
+		{ .procname = "mptcp" },
+		{ },
+	};
 #endif
-
 	mptcp_sock_cache = kmem_cache_create("mptcp_sock",
 					     sizeof(struct mptcp_tcp_sock),
 					     0, SLAB_HWCACHE_ALIGN|SLAB_PANIC,
@@ -1578,20 +1590,16 @@ static int __init mptcp_init(void)
 	if (!mptcp_wq)
 		goto alloc_workqueue_failed;
 
-	ret = mptcp_pm_init();
-	if (ret)
+	if (mptcp_pm_init())
 		goto mptcp_pm_failed;
 
 #ifdef CONFIG_SYSCTL
-	mptcp_sysclt = register_sysctl_paths(mptcp_path, mptcp_skeleton);
-	if (!mptcp_sysclt) {
-		ret = -ENOMEM;
+	if (!register_net_sysctl_table(&init_net, path, mptcp_table))
 		goto register_sysctl_failed;
-	}
 #endif
 
 out:
-	return ret;
+	return;
 
 #ifdef CONFIG_SYSCTL
 register_sysctl_failed:
@@ -1603,8 +1611,4 @@ alloc_workqueue_failed:
 	kmem_cache_destroy(mptcp_cb_cache);
 mptcp_cb_cache_failed:
 	kmem_cache_destroy(mptcp_sock_cache);
-
-	goto out;
 }
-
-late_initcall(mptcp_init);

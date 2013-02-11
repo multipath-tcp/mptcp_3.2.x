@@ -54,7 +54,7 @@ static inline u32 mptcp_hash_tk(u32 token)
 	return token % MPTCP_HASH_SIZE;
 }
 
-struct hlist_nulls_head tk_hashtable[MPTCP_HASH_SIZE];
+static struct hlist_nulls_head tk_hashtable[MPTCP_HASH_SIZE];
 
 /* This second hashtable is needed to retrieve request socks
  * created as a result of a join request. While the SYN contains
@@ -507,18 +507,27 @@ int mptcp_do_join_short(struct sk_buff *skb, struct mptcp_options_received *mopt
 		return -1;
 	}
 
-	if ( tcp_sk(meta_sk)->mpcb->infinite_mapping) {
-		/* We are in fallback-mode - thus no new subflows!!! */
-		sock_put(meta_sk); /* Taken by mptcp_hash_find */
-		return -1;
-	}
-
 	TCP_SKB_CB(skb)->mptcp_flags = MPTCPHDR_JOIN;
 
 	/* OK, this is a new syn/join, let's create a new open request and
 	 * send syn+ack
 	 */
 	bh_lock_sock(meta_sk);
+
+	/* This check is also done in mptcp_vX_do_rcv. But, there we cannot
+	 * call tcp_vX_send_reset, because we hold already two socket-locks.
+	 * (the listener and the meta from above)
+	 *
+	 * And the send-reset will try to take yet another one (ip_send_reply).
+	 * Thus, we propagate the reset up to tcp_rcv_state_process.
+	 */
+	if (tcp_sk(meta_sk)->mpcb->infinite_mapping ||
+	    meta_sk->sk_state == TCP_CLOSE || !tcp_sk(meta_sk)->inside_tk_table) {
+		bh_unlock_sock(meta_sk);
+		sock_put(meta_sk); /* Taken by mptcp_hash_find */
+		return -1;
+	}
+
 	if (sock_owned_by_user(meta_sk)) {
 		skb->sk = meta_sk;
 		TCP_SKB_CB(skb)->mptcp_flags = MPTCPHDR_JOIN;
@@ -728,6 +737,7 @@ void mptcp_address_worker(struct work_struct *work)
 	struct net_device *dev;
 	int i;
 
+	mutex_lock(&mpcb->mutex);
 	lock_sock(meta_sk);
 
 	if (sock_flag(meta_sk, SOCK_DEAD))
@@ -911,6 +921,7 @@ next_loc6_addr:
 	local_bh_enable();
 exit:
 	release_sock(meta_sk);
+	mutex_unlock(&mpcb->mutex);
 	sock_put(meta_sk);
 }
 
@@ -982,12 +993,13 @@ int mptcp_pm_addr_event_handler(unsigned long event, void *ptr, int family)
 static int mptcp_pm_seq_show(struct seq_file *seq, void *v)
 {
 	struct tcp_sock *meta_tp;
+	struct net *net = seq->private;
 	int i, n = 0;
 
 	seq_printf(seq, "  sl  loc_tok  rem_tok  v6 "
 		   "local_address                         "
 		   "remote_address                        "
-		   "st ns tx_queue rx_queue");
+		   "st ns tx_queue rx_queue inode");
 	seq_putc(seq, '\n');
 
 	for (i = 0; i < MPTCP_HASH_SIZE; i++) {
@@ -998,7 +1010,7 @@ static int mptcp_pm_seq_show(struct seq_file *seq, void *v)
 			struct sock *meta_sk = (struct sock *)meta_tp;
 			struct inet_sock *isk = inet_sk(meta_sk);
 
-			if (!meta_tp->mpc)
+			if (!meta_tp->mpc || !net_eq(net, sock_net(meta_sk)))
 				continue;
 
 			seq_printf(seq, "%4d: %04X %04X ", n++,
@@ -1027,12 +1039,13 @@ static int mptcp_pm_seq_show(struct seq_file *seq, void *v)
 					   ntohs(isk->inet_dport));
 #endif
 			}
-			seq_printf(seq, " %02X %02X %08X:%08X",
+			seq_printf(seq, " %02X %02X %08X:%08X %lu",
 					meta_sk->sk_state,
 					mpcb->cnt_subflows,
 					meta_tp->write_seq - meta_tp->snd_una,
 					max_t(int, meta_tp->rcv_nxt -
-						   meta_tp->copied_seq, 0));
+						   meta_tp->copied_seq, 0),
+					sock_i_ino(meta_sk));
 			seq_putc(seq, '\n');
 		}
 		rcu_read_unlock_bh();
