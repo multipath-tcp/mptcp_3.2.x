@@ -689,10 +689,6 @@ void tcp_v4_send_reset(struct sock *sk, struct sk_buff *skb)
 	TCP_INC_STATS_BH(net, TCP_MIB_OUTSEGS);
 	TCP_INC_STATS_BH(net, TCP_MIB_OUTRSTS);
 
-#ifdef CONFIG_MPTCP
-	if (sk && tcp_sk(sk)->mpc && tcp_sk(sk)->mptcp->teardown)
-		tcp_done(sk);
-#endif
 }
 
 /* The code following below sending ACKs in SYN-RECV and TIME-WAIT states
