@@ -1026,10 +1026,18 @@ static void mptcp_data_ack(struct sock *sk, const struct sk_buff *skb)
 	/* A valid packet came in - subflow is operational again */
 	tp->pf = 0;
 
+	/* Even if there is no data-ack, we stop retransmitting.
+	 * Except if this is a SYN/ACK. Then it is just a retransmission
+	 */
+	if (tp->mptcp->pre_established && !(tcb->tcp_flags & TCPHDR_SYN)) {
+		tp->mptcp->pre_established = 0;
+		sk_stop_timer(sk, &tp->mptcp->mptcp_ack_timer);
+	}
+
 	/* If we are in infinite mapping mode, rx_opt.data_ack has been
-+    * set by mptcp_clean_rtx_infinite.
-+    */
-+    if (!(tcb->mptcp_flags & MPTCPHDR_ACK) && !tp->mpcb->infinite_mapping)
+	 * set by mptcp_clean_rtx_infinite.
+	 */
+	if (!(tcb->mptcp_flags & MPTCPHDR_ACK) && !tp->mpcb->infinite_mapping)
 		goto exit;
 
 	data_ack = tp->mptcp->rx_opt.data_ack;
@@ -1042,11 +1050,6 @@ static void mptcp_data_ack(struct sock *sk, const struct sk_buff *skb)
 		 * includes a data-ack, we are fully established
 		 */
 		mptcp_become_fully_estab(sk);
-
-	if (tp->mptcp->pre_established) {
-		tp->mptcp->pre_established = 0;
-		sk_stop_timer(sk, &tp->mptcp->mptcp_ack_timer);
-	}
 
 	/* Get the data_seq */
 	if (mptcp_is_data_seq(skb)) {
