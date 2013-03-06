@@ -3706,6 +3706,7 @@ static int tcp_ack(struct sock *sk, struct sk_buff *skb, int flag)
 	u32 prior_fackets;
 	int prior_packets;
 	int prior_sacked = tp->sacked_out;
+	int pkts_acked = 0;
 	int newly_acked_sacked = 0;
 	int frto_cwnd = 0;
 
